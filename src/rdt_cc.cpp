@@ -18,8 +18,8 @@ RDT_CC::RDT_CC(unsigned int intial_seq_number) {
 
 void RDT_CC::fetch_data(unsigned int seq_number, std::string payload) {
   if(payload.empty()) {return;}
-
-  if(seq_number == receive_next_seq_number) {
+  int diff = (int)(seq_number - receive_next_seq_number);
+  if(diff == 0) {
     receive_buffer += payload;
     receive_next_seq_number += payload.length();
 
@@ -29,22 +29,24 @@ void RDT_CC::fetch_data(unsigned int seq_number, std::string payload) {
       receive_buffer += temp_payload;
       receive_next_seq_number += temp_payload.length();
     }
-  } else if(seq_number > receive_next_seq_number) {
+  } else if(diff > 0) {
     ooo_packets_buffer[seq_number] = payload;
   }
 }
 
-void RDT_CC::handle_ack(unsigned int ack_number, int window, double curr_time) {
+std::vector<std::pair<unsigned int, std::string>> RDT_CC::handle_ack(unsigned int ack_number, int window, double curr_time) {
   receiver_window = window;
-  
-  if(ack_number > sent_unacknowledged_seq_number) {
+  std::vector<std::pair<unsigned int, std::string>> fast_retransmit;
+
+  int diff = (int)(ack_number - sent_unacknowledged_seq_number);
+  if(diff > 0) {
     sent_unacknowledged_seq_number = ack_number;
     prev_ack_time = curr_time;
     duplicate_ack_count = 0;
 
     std::vector<segment_otw> still_otw;
     for(auto&s : segments_otw) {
-      if(s.seq_number >= ack_number) {
+      if ((int)(s.seq_number + s.payload.size() - ack_number) > 0) {
         still_otw.emplace_back(s);
       }
     }
@@ -56,17 +58,22 @@ void RDT_CC::handle_ack(unsigned int ack_number, int window, double curr_time) {
     } else {
       cwnd += (1460*1460)/cwnd;
     }
-  } else if (ack_number == sent_unacknowledged_seq_number) {
+  } else if (diff == 0) {
     duplicate_ack_count++;
     if(duplicate_ack_count == 3) {
       ssthresh = std::max(cwnd/2,1460);
-      cwnd = ssthresh+3*1460;
+      cwnd = ssthresh + 3 * 1460;
+      if (!segments_otw.empty()) { // fast retransmit
+        segments_otw[0].time = curr_time;
+        fast_retransmit.push_back({segments_otw[0].seq_number, segments_otw[0].payload});
+      }
     }
   }
+  return fast_retransmit;
 }
 
-std::vector<std::string> RDT_CC::get_segments(int peer_mss, double curr_time) {
-  std::vector<std::string> seg;
+std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_segments(int peer_mss, double curr_time) {
+  std::vector<std::pair<unsigned int, std::string>> seg;
   int unack_sent_bytes = send_next_seq_number - sent_unacknowledged_seq_number;
   int can_send = std::min(cwnd,receiver_window)-unack_sent_bytes;
 
@@ -80,7 +87,7 @@ std::vector<std::string> RDT_CC::get_segments(int peer_mss, double curr_time) {
     s.payload = temp_payload;
     s.time = curr_time;
     segments_otw.emplace_back(s);
-    seg.emplace_back(temp_payload);
+    seg.push_back({send_next_seq_number, temp_payload});
     send_next_seq_number += temp_payload.size();
     can_send -= temp_payload.size();
   }
@@ -88,18 +95,22 @@ std::vector<std::string> RDT_CC::get_segments(int peer_mss, double curr_time) {
   return seg;
 }
 
-std::vector<std::string> RDT_CC::get_timeout(double curr_time) {
-  std::vector<std::string> seg;
+std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_timeout(double curr_time) {
+  std::vector<std::pair<unsigned int, std::string>> seg;
   if(!segments_otw.size()) {
     return seg;
   }
 
   if(curr_time - segments_otw[0].time >= 1.0) {
-    ssthresh = std::min(cwnd/2,1460);
+    ssthresh = std::max(cwnd/2,1460);
     cwnd = 1460;
     segments_otw[0].time = curr_time;
-    seg.emplace_back(segments_otw[0].payload);
+    seg.push_back({segments_otw[0].seq_number, segments_otw[0].payload});
   }
 
   return seg;
+}
+
+bool RDT_CC::should_disconnect(double curr_time) {
+  return (prev_ack_time>0.0 && curr_time-prev_ack_time>=10.0);
 }

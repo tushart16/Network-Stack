@@ -4,6 +4,14 @@
 #include <cstdint>
 #include <string>
 
+//TCP flags
+uint16_t TCP_FIN = 0x001;
+uint16_t TCP_SYN = 0x002;
+uint16_t TCP_RST = 0x004;
+uint16_t TCP_PSH = 0x008;
+uint16_t TCP_ACK = 0x010;
+uint16_t TCP_URG = 0x020;
+
 struct tcp_header {
   uint16_t src_port;
   uint16_t dest_port;
@@ -30,4 +38,10 @@ int build_tcp_header(char* packet, char* src_ip, char* dest_ip, int src_port, in
                       char* payload, int payload_length);
 
 int payload_size(int left_data_len, int peer_mss);
+
+bool verify_tcp_checksum(char *packet, int tcp_len, char *src_ip,
+                         char *dest_ip);
+
+int get_mss(char* packet);
+
 #endif

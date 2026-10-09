@@ -31,11 +31,13 @@ class RDT_CC {
     RDT_CC(unsigned int initial_seq_number);
 
     void fetch_data(unsigned int seq_number, std::string payload);
-    void handle_ack(unsigned int ack_number, int window, double curr_time);
+    std::vector<std::pair<unsigned int, std::string>> handle_ack(unsigned int ack_number, int window, double curr_time);
 
-    std::vector<std::string> get_segments(int peer_mss, double curr_time);
-    std::vector<std::string> get_timeout(double curr_time);
 
+    std::vector<std::pair<unsigned int, std::string>> get_segments(int peer_mss, double curr_time);
+    std::vector<std::pair<unsigned int, std::string>> get_timeout(double curr_time);
+
+    bool should_disconnect(double curr_time);
 };
 
 #endif

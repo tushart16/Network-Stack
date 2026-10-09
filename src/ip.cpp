@@ -1,6 +1,7 @@
 #include "ip.h"
 #include "utils.h"
 #include <arpa/inet.h>
+#include <cstdint>
 #include <netinet/in.h>
 
 void build_ip_header(char* packet, char* src_ip, char* dest_ip, uint16_t tcp_len, uint16_t id) {
@@ -21,4 +22,14 @@ void build_ip_header(char* packet, char* src_ip, char* dest_ip, uint16_t tcp_len
   header->checksum = 0;
   header->checksum = get_checksum(header, 20);
   //htons and inet_addr are used for little to big endian conversion of bytes ordering
+}
+
+bool verify_ip_checksum(char *packet) {
+  ip_header* header = (ip_header*) packet;
+  uint16_t orig_checksum = header->checksum;
+  header->checksum = 0; // make 0 as need to recalculate it for the packet
+  int header_len = (header->version_ihl & 0x0F) * 4;
+  uint16_t calc_checksum = get_checksum(header, header_len);
+  header->checksum = orig_checksum;
+  return calc_checksum == orig_checksum;
 }
