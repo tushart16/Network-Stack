@@ -8,10 +8,11 @@
 class Connection {
 public:
   int sock;
-  int state; // 0->closed, 1->syn sent, 2-> established, 3 ->fin_wait
+  int state; // 0->closed, 1->syn sent, 2-> established, 3 ->fin_wait, 4-> syn_rcvd
 
   bool is_server = false;
   bool teardown = false;
+  bool peer_fin_received = false;
   
   std::string local_ip;
   int local_port;

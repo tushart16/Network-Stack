@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
 
     tcp_header* header2 = (tcp_header*)(buffer+header_len);
 
-    if(ntohs(header2->dest_port) || header2->flags != 0x02) {
+    if(ntohs(header2->dest_port) != port || header2->flags != 0x02) {
       continue;
     }
 
@@ -152,8 +152,7 @@ int main(int argc, char* argv[]) {
                           "Connection: close\r\n\r\n";
 
     c.rdt->send_buffer += (headers + body);
-
-    c.initiate_teardown();
+    c.teardown = 1;
     c.is_server = false;
     c.receive_loop();
   }
