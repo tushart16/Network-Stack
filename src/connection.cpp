@@ -4,6 +4,7 @@
 #include "utils.h"
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -91,6 +92,11 @@ void Connection::receive_loop() {
   while (true) {
     usleep(1000);
     double curr_time = get_time();
+
+    if(is_server && rdt->receive_buffer.find("\r\n\r\n") != std::string::npos) {
+      break;
+    }
+    
     if (state == 2 && rdt->should_disconnect(curr_time)) {
       state = 0;
       break;

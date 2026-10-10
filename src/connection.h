@@ -9,6 +9,10 @@ class Connection {
 public:
   int sock;
   int state; // 0->closed, 1->syn sent, 2-> established, 3 ->fin_wait
+
+  bool is_server = false;
+  bool teardown = false;
+  
   std::string local_ip;
   int local_port;
   std::string remote_ip;
