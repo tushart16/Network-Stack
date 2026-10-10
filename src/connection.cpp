@@ -2,55 +2,49 @@
 #include "ip.h"
 #include "tcp.h"
 #include "utils.h"
-#include <cstddef>
-#include <cstdint>
 #include <string>
-#include <sys/socket.h>
 #include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
+#include <unistd.h> //close and usleep
+#include <fcntl.h> //non blocking sockets
 #include <chrono>
-#include <cstdlib>
 #include <random>
-#include <iostream>
 
-Connection::Connection(std::string src_ip, int s_port, std::string dst_ip, int d_port) {
+Connection::Connection(std::string src_ip, int src_port, std::string dest_ip, int dest_port) {
   local_ip = src_ip;
-  local_port = s_port;
-  remote_ip = dst_ip;
-  remote_port = d_port;
-  state = 0; // CLOSED
-  packet_id = 100; // inital id for ip
+  local_port = src_port;
+  remote_ip = dest_ip;
+  remote_port = dest_port;
+  state = 0; //closed
+  packet_id = 142; //inital id for ip
   peer_mss = 1460;
 
-  sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-  int opt = 1;
-  setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &opt, sizeof(opt));
-  fcntl(sock, F_SETFL, O_NONBLOCK);// Set socket to non-blocking so the loop can manage timeouts
+  sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP); //raw socket (IPv4 TCP)
+  int opt = 1; //bool true for socket config (ip header include)
+  setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &opt, sizeof(opt)); //to forbit os from injecting its ip header (IP_HDRINCL)
+  fcntl(sock, F_SETFL, O_NONBLOCK); //set socket to non-blocking so the loop can manage timeouts
   
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<unsigned int> dis;
-  unsigned int isn = dis(gen); // random inital seq no.
-  rdt = new RDT_CC(isn);
+  std::uniform_int_distribution<unsigned int> distrbn;
+  unsigned int initial_seq_number = distrbn(gen); // random inital seq no.
+  rdt_cc = new RDT_CC(initial_seq_number);
 }
 
 Connection::~Connection() {
   close(sock);
-  delete rdt;
+  delete rdt_cc;
 }
 
 double Connection::get_time() {
   return std::chrono::duration<double>((std::chrono::steady_clock::now()).time_since_epoch()).count();
 }
 
-void Connection::send_tcp_seg(int flags, std::string payload,
-                              bool include_mss) {
+void Connection::send_tcp_seg(int flags, std::string payload, bool include_mss) {
   char datagram[4096];
   std::memset(datagram, 0, 4096);
   int tcp_len = build_tcp_header(datagram + 20, (char*)local_ip.c_str(), (char*)remote_ip.c_str(), 
                                  local_port, remote_port, 
-                                 rdt->send_next_seq_number, rdt->receive_next_seq_number, 
+                                 rdt_cc->send_next_seq_number, rdt_cc->receive_next_seq_number, 
                                  flags, 65535, (char*)payload.c_str(), payload.length());
 
   build_ip_header(datagram, (char*)local_ip.c_str(), (char*)remote_ip.c_str(), tcp_len, packet_id++);
@@ -63,23 +57,23 @@ void Connection::send_tcp_seg(int flags, std::string payload,
   sendto(sock, datagram, 20 + tcp_len, 0, (struct sockaddr *)&dest,
          sizeof(dest));
   log_packet("SEND", local_ip, local_port, remote_ip, remote_port, 64, packet_id - 1, 
-          rdt->send_next_seq_number, rdt->receive_next_seq_number, flags, 65535, 
+          rdt_cc->send_next_seq_number, rdt_cc->receive_next_seq_number, flags, 65535, 
           payload.length(), include_mss ? 1460 : -1);
 }
 
 void Connection::start_connection() {
   handshake_start_time = get_time();
   last_syn_time = handshake_start_time;
-  rdt->prev_ack_time = handshake_start_time; // initialize 10s timer
+  rdt_cc->prev_ack_time = handshake_start_time; // initialize 10s timer
   send_tcp_seg(TCP_SYN, "", true);
   state = 1; // syn sent
-  rdt->send_next_seq_number++; // syn consumes 1 sequence number
+  rdt_cc->send_next_seq_number++; // syn consumes 1 sequence number
 }
 
 void Connection::initiate_teardown() {
   if (state == 2) {
     send_tcp_seg(TCP_FIN | TCP_ACK, "", false);
-    rdt->send_next_seq_number++; // fin consumes 1 sequence number
+    rdt_cc->send_next_seq_number++; // fin consumes 1 sequence number
     state = 3;
     last_fin_time = get_time();
     last_fin_retransmit = last_fin_time;
@@ -93,16 +87,16 @@ void Connection::receive_loop() {
     usleep(1000);
     double curr_time = get_time();
 
-    if(is_server && rdt->receive_buffer.find("\r\n\r\n") != std::string::npos) {
+    if(is_server && rdt_cc->receive_buffer.find("\r\n\r\n") != std::string::npos) {
       break;
     }
     
-    if (state == 2 && rdt->should_disconnect(curr_time)) {
+    if (state == 2 && rdt_cc->should_disconnect(curr_time)) {
       state = 0;
       break;
     }
     if (state == 2) {
-      auto outgoing_segments = rdt->get_segments(peer_mss, curr_time); // drain send buffer
+      auto outgoing_segments = rdt_cc->get_segments(peer_mss, curr_time); // drain send buffer
       for (auto& p : outgoing_segments) {
         send_tcp_seg_with_seq(TCP_ACK, p.second, false, p.first);
       }
@@ -113,13 +107,13 @@ void Connection::receive_loop() {
       }
       static double last_syn_time = handshake_start_time;
       if (curr_time - last_syn_time >= 1.0) {
-        rdt->send_next_seq_number--;
+        rdt_cc->send_next_seq_number--;
         send_tcp_seg(TCP_SYN, "", true);
-        rdt->send_next_seq_number += 1;
+        rdt_cc->send_next_seq_number += 1;
         last_syn_time = curr_time;
       }
     } else if (state == 2) { //est
-      auto timeouts = rdt->get_timeout(curr_time);
+      auto timeouts = rdt_cc->get_timeout(curr_time);
       for (auto& p : timeouts) {
          send_tcp_seg_with_seq(TCP_ACK, p.second, false,p.first);
       }
@@ -127,10 +121,10 @@ void Connection::receive_loop() {
       if (curr_time - last_fin_time >= 2.0) {
         break;
       }
-      if (curr_time - last_fin_retransmit >= 1.0 && (rdt->sent_unacknowledged_seq_number < rdt->send_next_seq_number)) {
-        rdt->send_next_seq_number--;
+      if (curr_time - last_fin_retransmit >= 1.0 && (rdt_cc->sent_unacknowledged_seq_number < rdt_cc->send_next_seq_number)) {
+        rdt_cc->send_next_seq_number--;
         send_tcp_seg(TCP_FIN | TCP_ACK, "", false);
-        rdt->send_next_seq_number++;
+        rdt_cc->send_next_seq_number++;
         last_fin_retransmit = curr_time;
       }
     }
@@ -176,11 +170,11 @@ void Connection::receive_loop() {
 
     if (state == 2 && payload_len > 0) {
       std::string data(buffer + ip_header_len + tcp_header_len, payload_len);
-      rdt->fetch_data(recv_seq, data);
+      rdt_cc->fetch_data(recv_seq, data);
       send_tcp_seg(TCP_ACK, "", false); // cumulative ack
     }
     if ((state == 2 || state == 3) && (flags & TCP_ACK)) {
-      auto fast_retrans = rdt->handle_ack(recv_ack, ntohs(tcph->receiver_window), curr_time);
+      auto fast_retrans = rdt_cc->handle_ack(recv_ack, ntohs(tcph->receiver_window), curr_time);
       for (auto& p : fast_retrans) {
           send_tcp_seg_with_seq(TCP_ACK, p.second, false, p.first);
       }
@@ -189,29 +183,29 @@ void Connection::receive_loop() {
       send_tcp_seg(TCP_ACK, "", false);
     }
     if (state == 1 && (flags & TCP_SYN) && (flags & TCP_ACK)) { // syn-ack
-      if (recv_ack != rdt->send_next_seq_number) {
+      if (recv_ack != rdt_cc->send_next_seq_number) {
         continue;
       }
-      rdt->receive_next_seq_number = recv_seq + 1; 
-      rdt->sent_unacknowledged_seq_number = recv_ack;
+      rdt_cc->receive_next_seq_number = recv_seq + 1; 
+      rdt_cc->sent_unacknowledged_seq_number = recv_ack;
       state = 2;
       send_tcp_seg(TCP_ACK, "", false); // complete handshake
       continue;
     }
     if (flags & TCP_FIN) {
       unsigned int fin_seq = recv_seq + payload_len;
-      if (fin_seq == rdt->receive_next_seq_number) { // new, in-order fin
-          rdt->receive_next_seq_number++;
+      if (fin_seq == rdt_cc->receive_next_seq_number) { // new, in-order fin
+          rdt_cc->receive_next_seq_number++;
           send_tcp_seg(TCP_ACK, "", false);
           
           if (state != 3) { // Send fin if we haven't already
               send_tcp_seg(TCP_FIN | TCP_ACK, "", false);
-              rdt->send_next_seq_number++;
+              rdt_cc->send_next_seq_number++;
               state = 3;
               last_fin_time = curr_time;
               last_fin_retransmit = curr_time;
           }
-          else if (rdt->sent_unacknowledged_seq_number >= rdt->send_next_seq_number) {
+          else if (rdt_cc->sent_unacknowledged_seq_number >= rdt_cc->send_next_seq_number) {
             // Both sides have fin'd and ack'd. can close immediately.
             state = 0;
             break;
