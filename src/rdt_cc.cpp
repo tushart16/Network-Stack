@@ -154,8 +154,8 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_timeout(double cur
   return seg;
 }
 
-bool RDT_CC::should_disconnect(double curr_time) {
-  if(sent_unacknowledged_seq_number != send_next_seq_number) {
+bool RDT_CC::should_disconnect(double curr_time, bool is_server) {
+  if((sent_unacknowledged_seq_number != send_next_seq_number) || (is_server)) {
     return (prev_ack_time>0.0 && curr_time-prev_ack_time>=10.0);
   }
   return (prev_ack_time>0.0 && curr_time-prev_ack_time>=25.0);

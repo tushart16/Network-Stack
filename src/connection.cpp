@@ -109,7 +109,7 @@ void Connection::connection_fsm() {
       break;
     }
     
-    if (state == 2 && rdt_cc->should_disconnect(curr_time)) {
+    if (state == 2 && rdt_cc->should_disconnect(curr_time, is_server)) {
       if(is_server) {
         break; //for clean teardown in server
       }

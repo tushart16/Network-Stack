@@ -38,7 +38,7 @@ class RDT_CC {
     std::vector<std::pair<unsigned int, std::string>> get_segments(int peer_mss, double curr_time);
     std::vector<std::pair<unsigned int, std::string>> get_timeout(double curr_time);
 
-    bool should_disconnect(double curr_time);
+    bool should_disconnect(double curr_time, bool is_server = false);
 };
 
 #endif
