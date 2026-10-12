@@ -5,12 +5,12 @@
 #include <string>
 
 //TCP flags
-uint16_t TCP_FIN = 0x001;
-uint16_t TCP_SYN = 0x002;
-uint16_t TCP_RST = 0x004;
-uint16_t TCP_PSH = 0x008;
-uint16_t TCP_ACK = 0x010;
-uint16_t TCP_URG = 0x020;
+constexpr uint16_t TCP_FIN = 0x001;
+constexpr uint16_t TCP_SYN = 0x002;
+constexpr uint16_t TCP_RST = 0x004;
+constexpr uint16_t TCP_PSH = 0x008;
+constexpr uint16_t TCP_ACK = 0x010;
+constexpr uint16_t TCP_URG = 0x020;
 
 struct tcp_header {
   uint16_t src_port;
@@ -30,17 +30,14 @@ struct checksum_help {
   uint8_t zero;
   uint8_t protocol;
   uint16_t length;
-}__attribute((packed));
+}__attribute__((packed));
 
 
 int build_tcp_header(char* packet, char* src_ip, char* dest_ip, int src_port, int dest_port, 
                       unsigned int seq_number, unsigned int ack_number, int flags, int window, 
                       char* payload, int payload_length);
 
-int payload_size(int left_data_len, int peer_mss);
-
-bool verify_tcp_checksum(char *packet, int tcp_len, char *src_ip,
-                         char *dest_ip);
+bool verify_tcp_checksum(char *packet, int tcp_len, char *src_ip, char *dest_ip);
 
 int get_mss(char* packet);
 

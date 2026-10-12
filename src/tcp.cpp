@@ -1,10 +1,8 @@
 #include "tcp.h"
-#include "ip.h"
 #include "utils.h"
 #include <arpa/inet.h>
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
 
 int build_tcp_header(char* packet, char* src_ip, char* dest_ip, int src_port, int dest_port, 
                       unsigned int seq_number, unsigned int ack_number, int flags, int window, 
@@ -61,10 +59,6 @@ int build_tcp_header(char* packet, char* src_ip, char* dest_ip, int src_port, in
   return tcp_length;
 }
 
-int payload_size(int left_data_len, int peer_mss) {
-  return std::min({left_data_len,1460,peer_mss});
-}
-
 bool verify_tcp_checksum(char *packet, int tcp_len, char *src_ip, char *dest_ip) {
   tcp_header* header = (tcp_header*) packet;
   uint16_t orig_checksum = header->checksum;
@@ -92,16 +86,17 @@ bool verify_tcp_checksum(char *packet, int tcp_len, char *src_ip, char *dest_ip)
 
 int get_mss(char *packet) { // -1 if no mss found
   tcp_header* header = (tcp_header*) packet;
-  int header_length = (header->offset >> 4) * 4;
+  int header_length = (header->offset >> 4)*4;
   int curr_offset = sizeof(tcp_header);
   while (curr_offset < header_length) {
-    uint8_t kind = *(uint8_t *)(packet + curr_offset);
-    if(kind == 0 ){break;} // end of options
+    uint8_t kind = *(uint8_t*)(packet + curr_offset);
+    if(kind == 0) {break;} // end of options
     if (kind == 1) { // no-op , ignore it
       curr_offset++;
       continue;
     }
-    uint8_t len = *(uint8_t *)(packet + curr_offset + 1);
+    uint8_t len = *(uint8_t*)(packet + curr_offset + 1);
+    if(len<2) {break;} //if 0
     if (kind == 2 && len == 4) { // mss option
       uint16_t mss;
       std::memcpy(&mss, packet + curr_offset + 2, 2);

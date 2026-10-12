@@ -19,6 +19,21 @@ RDT_CC::RDT_CC(unsigned int intial_seq_number) {
 void RDT_CC::fetch_data(unsigned int seq_number, std::string payload) {
   if(payload.empty()) {return;}
   int diff = (int)(seq_number - receive_next_seq_number);
+
+  if(diff<0) {
+    if(-diff < (int)payload.length()) {
+      payload = payload.substr(-diff);
+      seq_number = receive_next_seq_number;
+      diff = 0;
+    } else {
+      return;
+    }
+  }
+
+  if(diff >= 65535) {
+    return;
+  }
+
   if(diff == 0) {
     receive_buffer += payload;
     receive_next_seq_number += payload.length();
@@ -30,7 +45,10 @@ void RDT_CC::fetch_data(unsigned int seq_number, std::string payload) {
       receive_next_seq_number += temp_payload.length();
     }
   } else if(diff > 0) {
-    ooo_packets_buffer[seq_number] = payload;
+    auto it = ooo_packets_buffer.find(seq_number);
+    if(it == ooo_packets_buffer.end() || it->second.length() < payload.length()) {
+      ooo_packets_buffer[seq_number] = payload;
+    }
   }
 }
 
@@ -38,8 +56,14 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::handle_ack(unsigned in
   receiver_window = window;
   std::vector<std::pair<unsigned int, std::string>> fast_retransmit;
 
+  if((int)(ack_number-send_next_seq_number) > 0) {
+    return fast_retransmit;
+  }
+
   int diff = (int)(ack_number - sent_unacknowledged_seq_number);
   if(diff > 0) {
+    bool fast_recovery = (duplicate_ack_count >= 3);
+
     sent_unacknowledged_seq_number = ack_number;
     prev_ack_time = curr_time;
     duplicate_ack_count = 0;
@@ -53,20 +77,27 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::handle_ack(unsigned in
 
     segments_otw = still_otw;
 
-    if(cwnd<ssthresh) {
-      cwnd += 1460;
+    if(fast_recovery) {
+      cwnd = ssthresh; //move to congestion avoidance
     } else {
-      cwnd += (1460*1460)/cwnd;
+      if(cwnd<ssthresh) { //slow start
+        cwnd += 1460;
+      } else { //congestion avoidance
+        cwnd += (1460*1460)/cwnd;
+      }
     }
-  } else if (diff == 0) {
+  } else if (diff == 0 && !segments_otw.empty()) {
     duplicate_ack_count++;
     if(duplicate_ack_count == 3) {
-      ssthresh = std::max(cwnd/2,1460);
-      cwnd = ssthresh + 3 * 1460;
-      if (!segments_otw.empty()) { // fast retransmit
-        segments_otw[0].time = curr_time;
-        fast_retransmit.push_back({segments_otw[0].seq_number, segments_otw[0].payload});
-      }
+      ssthresh = std::max(2*1460,cwnd/2);
+      cwnd = ssthresh + 3*1460;
+
+      // fast retransmit
+      segments_otw[0].time = curr_time;
+      fast_retransmit.push_back({segments_otw[0].seq_number, segments_otw[0].payload});
+    } else if(duplicate_ack_count > 3) { 
+      //fast recovery
+      cwnd += 1460;
     }
   }
   return fast_retransmit;
@@ -101,9 +132,10 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_timeout(double cur
     return seg;
   }
 
-  if(curr_time - segments_otw[0].time >= 1.0) {
-    ssthresh = std::max(cwnd/2,1460);
+  if(curr_time - segments_otw[0].time >= 0.25) { //go to slow start
+    ssthresh = std::max(cwnd/2,2*1460);
     cwnd = 1460;
+    duplicate_ack_count = 0;
     segments_otw[0].time = curr_time;
     seg.push_back({segments_otw[0].seq_number, segments_otw[0].payload});
   }

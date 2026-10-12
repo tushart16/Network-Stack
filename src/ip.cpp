@@ -2,7 +2,6 @@
 #include "utils.h"
 #include <arpa/inet.h>
 #include <cstdint>
-#include <netinet/in.h>
 
 void build_ip_header(char* packet, char* src_ip, char* dest_ip, uint16_t tcp_len, uint16_t id) {
   ip_header* header = (ip_header*) packet;

@@ -1,13 +1,12 @@
 #include "connection.h"
 #include "ip.h"
+#include "utils.h"
 #include "tcp.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <filesystem>
-#include <netinet/in.h>
-#include <sstream>
 #include <fstream>
 #include <string>
-#include <sys/socket.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -45,39 +44,50 @@ std::string content_type(std::string path) {
 
 int main(int argc, char* argv[]) {
   int port = 8080;
-  std::string root = "./www";
+  std::string docroot = "./www";
 
   for(int i = 1; i<argc; i++) {
     if(argv[i] == std::string("-p") && i+1<argc) {
       port = std::stoi(argv[++i]);
     } else if(argv[i] == std::string("-d") && i+1<argc) {
-      root = argv[++i];
-    } 
+      docroot = argv[++i];
+    } else if(argv[i] == std::string("--log") && i+1<argc) {
+      log_file = argv[++i];
+    }
   }
 
   int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+  int opt = 1;
+  setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &opt, sizeof(opt));
   fcntl(sock, F_SETFL, O_NONBLOCK);
+  int receive_buff = 4*1024*1024;
+  if(setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, &receive_buff, sizeof(receive_buff)) < 0) {
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &receive_buff, sizeof(receive_buff));
+  }
 
   while(true) {
-    usleep(1000);
-
     char buffer[4096];
     int len_data = recvfrom(sock, buffer, 4096, 0, NULL, NULL);
-    if(len_data<20) {continue;}
+    if(len_data<20) {usleep(1000); continue;}
 
     ip_header* header = (ip_header*) buffer;
     if(!verify_ip_checksum(buffer)) {
       continue;
     }
 
+    int datagram_len = ntohs(header->length);
+    if(len_data < ntohs(header->length)) {
+      continue;
+    }
+
     int header_len = (header->version_ihl&0x0F)*4;
-    if(len_data<header_len+20) {
+    if(header_len<20 || len_data<header_len+20) {
       continue;
     }
 
     tcp_header* header2 = (tcp_header*)(buffer+header_len);
 
-    if(ntohs(header2->dest_port) != port || header2->flags != 0x02) {
+    if(ntohs(header2->dest_port) != port || ((header2->flags)&(TCP_SYN|TCP_ACK|TCP_FIN|TCP_RST)) != TCP_SYN) {
       continue;
     }
 
@@ -90,70 +100,122 @@ int main(int argc, char* argv[]) {
     std::string client_ip = get_ip(header->src_addr);
     int client_port = ntohs(header2->src_port);
 
-    Connection c("10.10.3.10", port, client_ip, client_port);
+    if(!verify_tcp_checksum((char*)(header2), datagram_len-header_len, (char*)(client_ip.c_str()), (char*)(server_ip.c_str()))) {
+      continue;
+    }
 
-    c.rdt->receive_next_seq_number = ntohl(header2->seq_number)+1;
+    Connection c(server_ip, port, client_ip, client_port);
+
+    c.rdt_cc->receive_next_seq_number = ntohl(header2->seq_number)+1;
+
+    int mss_syn = get_mss((char*)header2);
+    log_packet("RECV", client_ip, client_port, server_ip, port, header->ttl, ntohs(header->identification),
+                ntohl(header2->seq_number), ntohl(header2->ack_number), header2->flags, ntohs(header2->receiver_window),
+                datagram_len-header_len-((header2->offset>>4)*4), mss_syn);
+
+    if(mss_syn > 0) {
+      c.peer_mss = mss_syn;
+    }
+
     c.send_tcp_seg(0x12, "", true); //syn-ack
+    c.rdt_cc->send_next_seq_number++;
     c.state = 4; //syn_received
 
     c.is_server = true;
-    c.receive_loop();
+    c.connection_fsm();
 
-    std::string req = c.rdt->receive_buffer;
-    if(req.empty()) {continue;}
-    if(req.find("\r\n\r\n") == std::string::npos) {continue;}
+    std::string req = c.rdt_cc->receive_buffer;
+    
+    if(req.find("\r\n\r\n") == std::string::npos) {
+      if(c.state == 2) {
+        c.teardown = 1;
+        c.is_server = false;
+        c.connection_fsm();
+      }
+      continue;
+    }
+
+    if(c.state != 2) {continue;}
 
     req = req.substr(0,req.find("\r\n\r\n"));
+    std::string req_line = req.substr(0,req.find("\r\n"));
+    int spaces = std::count(begin(req_line),end(req_line),' ');
 
-    std::stringstream ss(req);
-    std::string method, target, version;
-    ss>>method>>target>>version;
+    std::stringstream ss(req_line);
+    std::string method, target, version, extra;
+    ss>>method>>target>>version>>extra;
 
     std::string status = "200 OK", body = "", path = "";
+    unsigned long content_len = 0;
 
-    if(method.empty() || target.empty() || version.empty() || target[0] != '/' || version.find("HTTP/") != 0) {
+    if(method.empty() || target.empty() || version.empty() || !extra.empty() || spaces != 2 || target[0] != '/' || 
+      !(version.size() == 8 && version.compare(0,5,"HTTP/")==0 && isdigit(version[5]) && isdigit(version[7]) && version[6]=='.')) {
       status = "400 Bad Request";
-    } else if(method != "GET" || method != "HEAD") {
+    } else if(method != "GET" && method != "HEAD") {
       status = "501 Not Implemented";
-    } else if(target.find("..") != std::string::npos) {
-      status = "403 Forbidden";
     } else {
       int idx = target.find("?");
       if(idx != std::string::npos) {
         target = target.substr(0,idx);
       }
-      path = root+target;
 
-      if(target.back() == '/' || std::filesystem::is_directory(path)) {
-        if(path.back() != '/') {
-          path += '/';
+      std::stringstream ss(target);
+      std::string seg;
+      bool dotdot = false;
+      while(std::getline(ss,seg,'/')) {
+        if(seg == "..") {
+          dotdot = true;
+          break;
         }
-        path += "index.html";
       }
 
-      std::ifstream file(path, std::ios::binary);
+      if(dotdot) {
+        status = "403 Forbidden";
+      } else {
+        path = docroot+target;
+        
+        std::error_code e;
+        if(target.back() == '/' || std::filesystem::is_directory(path,e)) {
+          if(path.back() != '/') {
+            path += '/';
+          }
+          path += "index.html";
+        }
+  
+        std::ifstream file(path, std::ios::binary);
+  
+        if(!file) {
+          status = "404 Not Found";
+        } else {
+          std::ostringstream os;
+          os << file.rdbuf();
+          body = os.str();
+          content_len = body.length();
 
-      if(!file) {
-        status = "404 Not Found";
-      } else if(method == "GET") {
-        std::ostringstream os;
-        os << file.rdbuf();
-        body = os.str();
+          if(method == "HEAD") {
+            body.clear();
+          }
+        }
       }
     }
 
     if(status != "200 OK") {
       body = "<html><body><h1>" + status + "</h1></body></html>";
+      content_len = body.length();
+      if(method == "HEAD") {
+        body.clear();
+      }
     }
 
     std::string headers = "HTTP/1.1 " + status + "\r\n" +
-                          "Content-Length: " + std::to_string(body.length()) + "\r\n" +
-                          "Content-Type: " + content_type(path) + "\r\n" +
+                          "Content-Length: " + std::to_string(content_len) + "\r\n" +
+                          "Content-Type: " + ((status == "200 OK") ? content_type(path) : "text/html") + "\r\n" +
                           "Connection: close\r\n\r\n";
 
-    c.rdt->send_buffer += (headers + body);
+    c.rdt_cc->send_buffer += (headers + body);
     c.teardown = 1;
     c.is_server = false;
-    c.receive_loop();
+    c.rdt_cc->prev_ack_time = c.get_time();
+    c.connection_fsm();
   }
 }
