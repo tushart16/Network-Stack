@@ -40,6 +40,7 @@ void log_packet(std::string dir, std::string src_ip, int src_port,
   if(!log_file.empty()) {
     std::ofstream out(log_file,std::ios::app);
     out << log;
+    out.flush();
   } else {
     // std::cout << log;
     // std::cout.flush();  

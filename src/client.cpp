@@ -2,10 +2,11 @@
 #include "utils.h"
 #include <iostream>
 #include <fstream>
-#include <string>
+#include <cstring>
 #include <cstdlib>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 // extract host, host header, port and path from the url 
 bool parse_url(std::string url, std::string &host, std::string &host_header,  int &port, std::string &path) { 
@@ -69,7 +70,26 @@ int main(int argc, char* argv[]) {
   std::string server_ip = inet_ntoa(*(struct in_addr*)he->h_addr_list[0]); //ip : binary->string
   std::string client_ip = "10.10.1.10";
 
-  srand(time(NULL));
+  //correct way
+  int udp = socket(AF_INET, SOCK_DGRAM, 0);
+  if(udp >= 0) {
+    struct sockaddr_in server_addr;
+    std::memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = inet_addr(server_ip.c_str());
+
+    if(connect(udp,(struct sockaddr*)&server_addr, sizeof(server_addr)) == 0) {
+      struct sockaddr_in local_addr;
+      socklen_t addr_size = sizeof(local_addr);
+      if(getsockname(udp,(struct sockaddr*)&local_addr, &addr_size) == 0) {
+        client_ip = inet_ntoa(local_addr.sin_addr);
+      }
+    }
+    close(udp);
+  }
+
+  srand(time(NULL)^(getpid()));
   int client_port = 61000 + (rand()%4536); // random port in this range
 
   Connection conn(client_ip, client_port, server_ip, port);

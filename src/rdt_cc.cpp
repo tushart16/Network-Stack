@@ -14,6 +14,8 @@ RDT_CC::RDT_CC(unsigned int intial_seq_number) {
   receiver_window = 65535;
   duplicate_ack_count = 0;
   prev_ack_time = 0.0;
+
+  sent = 0;
 }
 
 void RDT_CC::fetch_data(unsigned int seq_number, std::string payload) {
@@ -108,10 +110,11 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_segments(int peer_
   int unack_sent_bytes = send_next_seq_number - sent_unacknowledged_seq_number;
   int can_send = std::min(cwnd,receiver_window)-unack_sent_bytes;
 
-  while(can_send>0 && send_buffer.length()) {
-    int to_send = std::min({can_send,peer_mss,1460,(int)send_buffer.length()});
-    std::string temp_payload = send_buffer.substr(0,to_send);
-    send_buffer.erase(0,to_send);
+  while(can_send>0 && send_buffer.length()>sent) {
+    int to_send = std::min({can_send,peer_mss,1460,(int)(send_buffer.length()-sent)});
+    std::string temp_payload = send_buffer.substr(sent,to_send);
+    // send_buffer.erase(0,to_send);
+    sent += to_send;
 
     segment_otw s;
     s.seq_number = send_next_seq_number;
@@ -123,6 +126,14 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_segments(int peer_
     can_send -= temp_payload.size();
   }
 
+  if(sent == send_buffer.length()) {
+    send_buffer.clear();
+    sent = 0;
+  } else if(sent >= (1<<18)) {
+    send_buffer.erase(0,sent);
+    sent = 0;
+  }
+
   return seg;
 }
 
@@ -132,7 +143,7 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_timeout(double cur
     return seg;
   }
 
-  if(curr_time - segments_otw[0].time >= 0.25) { //go to slow start
+  if(curr_time - segments_otw[0].time >= 0.65) { //go to slow start
     ssthresh = std::max(cwnd/2,2*1460);
     cwnd = 1460;
     duplicate_ack_count = 0;
@@ -144,5 +155,8 @@ std::vector<std::pair<unsigned int, std::string>> RDT_CC::get_timeout(double cur
 }
 
 bool RDT_CC::should_disconnect(double curr_time) {
-  return (prev_ack_time>0.0 && curr_time-prev_ack_time>=10.0);
+  if(sent_unacknowledged_seq_number != send_next_seq_number) {
+    return (prev_ack_time>0.0 && curr_time-prev_ack_time>=10.0);
+  }
+  return (prev_ack_time>0.0 && curr_time-prev_ack_time>=25.0);
 }

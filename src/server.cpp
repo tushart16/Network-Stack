@@ -68,7 +68,11 @@ int main(int argc, char* argv[]) {
   while(true) {
     char buffer[4096];
     int len_data = recvfrom(sock, buffer, 4096, 0, NULL, NULL);
-    if(len_data<20) {usleep(1000); continue;}
+    if(len_data < 0) {
+      usleep(1000);
+      continue;
+    }
+    if(len_data<20) {continue;}
 
     ip_header* header = (ip_header*) buffer;
     if(!verify_ip_checksum(buffer)) {
@@ -182,15 +186,17 @@ int main(int argc, char* argv[]) {
           path += "index.html";
         }
   
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(path, std::ios::binary|std::ios::ate);
   
         if(!file) {
           status = "404 Not Found";
         } else {
-          std::ostringstream os;
-          os << file.rdbuf();
-          body = os.str();
-          content_len = body.length();
+          std::streamsize sz = file.tellg();
+          file.seekg(0,std::ios::beg);
+
+          body.resize(sz);
+          file.read(body.data(),sz);
+          content_len = sz;
 
           if(method == "HEAD") {
             body.clear();

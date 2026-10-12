@@ -163,8 +163,11 @@ void Connection::connection_fsm() {
 
     char buffer[4096];
     int data_sz = recvfrom(sock, buffer, 4096, 0, NULL, NULL);
+    if(data_sz < 0) {
+      usleep(1000);
+      continue;
+    }
     if (data_sz < 20) {
-      usleep(100);
       continue;
     } // non blocking read
     ip_header *iph = (ip_header*)buffer;
@@ -255,14 +258,9 @@ void Connection::connection_fsm() {
         peer_fin_received = true;
         send_tcp_seg(TCP_ACK, "", false);
         
-        if (state != 3) { //send fin if we haven't already
-          send_tcp_seg(TCP_FIN | TCP_ACK, "", false);
-          rdt_cc->send_next_seq_number++;
-          state = 3;
-          last_fin_time = curr_time;
-          last_fin_retransmit = curr_time;
-        }
-        else if (rdt_cc->sent_unacknowledged_seq_number == rdt_cc->send_next_seq_number) {
+        if(state != 3) {
+          teardown = 1;
+        } else if (state == 3 && rdt_cc->sent_unacknowledged_seq_number == rdt_cc->send_next_seq_number) {
           // both sides have fin'd and ack'd. can close immediately.
           state = 0;
           break;

@@ -20,6 +20,8 @@ class RDT_CC {
     int receiver_window;
     int duplicate_ack_count;
     double prev_ack_time;
+
+    size_t sent = 0;
     
     unsigned int receive_next_seq_number;
     std::map<unsigned int, std::string> ooo_packets_buffer;
