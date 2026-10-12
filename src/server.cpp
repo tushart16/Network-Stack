@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <unistd.h>
 #include <fcntl.h>
